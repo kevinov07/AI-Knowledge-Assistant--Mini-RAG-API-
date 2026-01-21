@@ -1,9 +1,15 @@
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import os
+from functools import lru_cache
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-model = SentenceTransformer(EMBEDDING_MODEL)
+
+@lru_cache
+def get_embedding_model():
+    return SentenceTransformer(EMBEDDING_MODEL)
+
+model = get_embedding_model()
 
 def normalize_vector(vector: np.ndarray) -> np.ndarray:
 
