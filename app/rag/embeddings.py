@@ -1,8 +1,9 @@
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import os
 
-
-model = SentenceTransformer('all-MiniLM-L6-v2')
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+model = SentenceTransformer(EMBEDDING_MODEL)
 
 def normalize_vector(vector: np.ndarray) -> np.ndarray:
 

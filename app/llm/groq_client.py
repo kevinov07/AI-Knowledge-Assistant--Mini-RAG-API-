@@ -1,7 +1,8 @@
 from groq import Groq
 import os
 
-DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_TEMPERATURE = float(os.getenv("GROQ_TEMPERATURE", "0.2"))
 
 def get_groq_client():
     return Groq(
@@ -11,7 +12,8 @@ def get_groq_client():
 def generate_answer(
     question: str,
     context: str,
-    model: str = DEFAULT_MODEL
+    model: str = DEFAULT_MODEL,
+    temperature: float = DEFAULT_TEMPERATURE
 ) -> str:
     client = get_groq_client()
     prompt = f"""
@@ -32,7 +34,7 @@ Respuesta:
         messages=[
             {"role": "user", "content": prompt}
         ],
-        temperature=0.2
+        temperature=temperature
     )
 
     return completion.choices[0].message.content.strip()
