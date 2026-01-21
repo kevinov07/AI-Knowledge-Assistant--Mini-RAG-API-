@@ -5,6 +5,7 @@ __pycache__/
 
 # Environment variables
 .env
+.env.local
 
 # IDE
 .vscode/
@@ -15,3 +16,10 @@ __pycache__/
 
 # Temporary files
 *.tmp
+
+# Azure
+.azure/
+*.PublishSettings
+
+# Docker (local only)
+docker-compose.override.yml
