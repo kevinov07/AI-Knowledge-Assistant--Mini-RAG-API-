@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: ai-knowledge-assistant-api
+    env: python
+    region: oregon
+    plan: free
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      # Requeridas
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: GROQ_API_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      # Opcionales (tienen defaults)
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+      - key: GROQ_TEMPERATURE
+        value: 0.2
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
