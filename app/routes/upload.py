@@ -1,78 +1,144 @@
+"""
+Subida de documentos: múltiples formatos vía DocumentProcessor.
+
+Guarda chunks en store (CHUNKS_METADATA, CHUNK_IDS) y en vectorstore FAISS (LangChain).
+El texto se normaliza (especialmente PDF) para mejorar la calidad en búsqueda semántica.
+"""
+from typing import List
+import uuid
+
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
+
 from app.rag.chunking import chunk_text
-from app.rag.embeddings import get_embedding
-from app.rag.faiss_index import init_index, add_embeddings, is_initialized
+from app.rag.document_processor import DocumentProcessor
 from app.rag.store import CHUNKS_METADATA, CHUNK_IDS
 from app.schemas import UploadResponse
-from typing import List
-import numpy as np
-import uuid
+from app.rag.vectorstore import add_documents, init_vectorstore, is_initialized
+from app.rag.embeddings import get_langchain_embeddings
+from langchain_core.documents import Document
 
 router = APIRouter()
 
-@router.post("/upload", response_model=UploadResponse)
-async def upload_files(files: List[UploadFile] = File(...)):
+SUPPORTED_EXTENSIONS = ", ".join(sorted(DocumentProcessor.SUPPORTED_FORMATS))
+
+
+@router.post(
+    "/upload",
+    response_model=UploadResponse,
+    summary="Subir documentos para indexar",
+    response_description="Lista de archivos subidos correctamente, fallos (si los hay) y número de documentos indexados.",
+)
+async def upload_files(
+    files: List[UploadFile] = File(
+        ...,
+        description=f"Uno o más archivos a procesar. Formatos soportados: {SUPPORTED_EXTENSIONS}.",
+    ),
+):
+    """
+    Procesa y **indexa** uno o más documentos para poder consultarlos luego con `POST /api/ask`.
+
+    Flujo por cada archivo:
+    1. Valida nombre y extensión (solo formatos soportados).
+    2. Extrae el texto según el tipo (PDF, DOCX, XLSX, etc.) y lo normaliza.
+    3. Divide el texto en chunks (RecursiveCharacterTextSplitter).
+    4. Crea el índice FAISS con embeddings (o añade al existente) y guarda metadata en memoria.
+
+    **Formatos soportados:** .txt, .pdf, .docx, .md, .csv, .xlsx, .xls
+
+    Si algún archivo falla (formato no soportado, vacío, error de lectura), se incluye en
+    `failed_files` con el motivo; el resto se procesa igual. Si **todos** fallan, responde 400.
+
+    **Respuesta:**
+    - `files_uploaded`: nombres de los archivos indexados correctamente.
+    - `failed_files`: lista de { filename, error } para los que fallaron.
+    - `documents_indexed`: cantidad de documentos indexados (= len(files_uploaded)).
+    """
     if not files:
         raise HTTPException(status_code=400, detail="No files uploaded")
-    
+
     uploaded_files = []
     failed_files = []
 
     for file in files:
-        if not file.filename.endswith('.txt'):
+        if not file.filename or not file.filename.strip():
+            failed_files.append({"filename": "(sin nombre)", "error": "Nombre de archivo vacío."})
+            continue
+
+        if not DocumentProcessor.is_supported(file.filename):
             failed_files.append({
                 "filename": file.filename,
-                "error": "Only .txt files are supported for now."
+                "error": f"Formato no soportado. Use: {SUPPORTED_EXTENSIONS}"
             })
             continue
-        
+
         try:
             content = await file.read()
-            text = content.decode('utf-8')
+            text = DocumentProcessor.process_document(content, file.filename)
+            if not text or not text.strip():
+                failed_files.append({
+                    "filename": file.filename,
+                    "error": "El documento está vacío o no se pudo extraer texto."
+                })
+                continue
 
             chunks = chunk_text(text)
             if not chunks:
                 failed_files.append({
                     "filename": file.filename,
-                    "error": "File is empty or could not be chunked."
+                    "error": "No se pudo dividir en chunks (texto vacío o demasiado corto)."
                 })
                 continue
-            
+
             document_id = str(uuid.uuid4())
-            embeddings = []
+            documents = [
+                Document(
+                    page_content=chunk.strip(), 
+                    metadata={
+                        "source": file.filename,
+                        "document_id": document_id,
+                        "chunk_id": f"{document_id}_{i}",
+                        "chunk_index": i,
+                        "filename": file.filename
+                    }
+                )
+                for i, chunk in enumerate(chunks)
+            ]
+            
+            if not is_initialized():
+                init_vectorstore(documents, get_langchain_embeddings())
+            else:
+                add_documents(documents)
 
             for i, chunk in enumerate(chunks):
-                embedding = get_embedding(chunk)
-                embeddings.append(embedding)
                 chunk_id = f"{document_id}_{i}"
+
                 CHUNK_IDS.append(chunk_id)
                 CHUNKS_METADATA[chunk_id] = {
                     "document_id": document_id,
                     "chunk_index": i,
-                    "text": chunk
+                    "text": chunk.strip(),
+                    "filename": file.filename,
                 }
-
-            embeddings = np.array(embeddings).astype("float32")
-        
-            if not is_initialized():
-                init_index(embeddings.shape[1])
-            
-            add_embeddings(embeddings)
-            
             uploaded_files.append(file.filename)
 
+        except ValueError as e:
+            failed_files.append({"filename": file.filename, "error": str(e)})
         except Exception as e:
             failed_files.append({
                 "filename": file.filename,
-                "error": str(e)
+                "error": f"Error al procesar: {str(e)}"
             })
 
     if not uploaded_files:
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="No files could be processed"
+            content={
+                "detail": "No se pudo procesar ningún archivo. Formatos soportados: " + SUPPORTED_EXTENSIONS,
+                "failed_files": failed_files,
+            },
         )
-    
+
     return {
         "files_uploaded": uploaded_files,
         "failed_files": failed_files,

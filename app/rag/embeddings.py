@@ -1,40 +1,32 @@
-from sentence_transformers import SentenceTransformer
-import numpy as np
 import os
 from functools import lru_cache
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+from langchain_huggingface import HuggingFaceEmbeddings
 
-@lru_cache
-def get_embedding_model():
-    """
-    Lazy loading del modelo de embeddings.
-    Se carga una sola vez en la primera llamada (gracias a lru_cache).
-    Esto reduce el uso de memoria en el startup.
-    """
-    return SentenceTransformer(EMBEDDING_MODEL)
-
-def normalize_vector(vector: np.ndarray) -> np.ndarray:
-
-    """
-    Normaliza un vector dividiéndolo por su módulo.
-    """
-    module = np.linalg.norm(vector)
-    if module == 0:
-        return vector
-    return vector / module
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
 
-def get_embedding(text: str):
+@lru_cache(maxsize=1)
+def get_langchain_embeddings() -> HuggingFaceEmbeddings:
     """
-    Recibe un texto y devuelve su embedding como lista de floats.
+    Instancia de HuggingFaceEmbeddings compatible con LangChain (FAISS, etc.).
+    Se carga una sola vez en la primera llamada.
     """
-    model = get_embedding_model()  # Lazy loading
-    vector = np.array(model.encode(text))
-    return normalize_vector(vector)
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
 
-def get_embeddings(texts: list[str]):
-    """
-    Recibe una lista de textos y devuelve una lista de embeddings.
-    """
-    return [get_embedding(text) for text in texts]
+
+def get_embedding(text: str) -> list[float]:
+    """Devuelve el embedding de un texto como lista de floats (compat con código existente)."""
+    return get_langchain_embeddings().embed_query(text)
+
+
+def get_embeddings(texts: list[str]) -> list[list[float]]:
+    """Devuelve una lista de embeddings para una lista de textos."""
+    if not texts:
+        return []
+    return get_langchain_embeddings().embed_documents(texts)
+

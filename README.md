@@ -4,17 +4,20 @@ API de inteligencia artificial para consultas sobre documentos utilizando RAG (R
 
 ## 🚀 Características
 
-- Procesamiento y análisis de documentos
-- Sistema de embeddings con Sentence Transformers
-- Búsqueda semántica con FAISS
-- Generación de respuestas con Groq LLM
-- API RESTful con FastAPI
-- Soporte para archivos de texto y PDF
+- Procesamiento y análisis de documentos **multi‑formato** (`.txt`, `.pdf`, `.docx`, `.md`, `.csv`, `.xlsx`, `.xls`)
+- Sistema de embeddings con **Sentence Transformers** (vía `HuggingFaceEmbeddings`)
+- Búsqueda semántica con **FAISS** (vectorstore de LangChain)
+- Generación de respuestas con **Groq LLM**
+- API RESTful con **FastAPI**
+- Retrieval con expansión de contexto para mejorar la coherencia de las respuestas
 
 ## 📋 Requisitos
 
 - Python 3.12+
 - pip
+
+> La API key de **Groq** (`GROQ_API_KEY`) se puede obtener de forma gratuita
+> creando una cuenta en la consola de Groq: [Groq Console](https://console.groq.com/keys).
 
 ## 🛠️ Instalación Local
 
@@ -51,55 +54,14 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 La API estará disponible en `http://localhost:8000`
 
-## 🌐 Despliegue en Producción
-
-### 🔵 Azure for Students (Recomendado)
-
-**Despliegue con Docker + CI/CD automático**
-
-Ver guía completa: [AZURE_DEPLOYMENT.md](./AZURE_DEPLOYMENT.md)
-
-```bash
-# 1. Crear recursos en Azure (Container Registry + Web App)
-# 2. Configurar GitHub Secrets
-# 3. Push a GitHub → Auto-deploy ✅
-```
-
-**Ventajas:**
-- ✅ CI/CD automático con GitHub Actions
-- ✅ Docker para builds consistentes
-- ✅ $100 USD crédito gratis (12 meses)
-- ✅ Escalable y profesional
-
-### Despliegue en Render (Alternativa)
-
-### Opción 1: Usando render.yaml (Recomendado)
-
-1. Conecta tu repositorio a Render
-2. Render detectará automáticamente el archivo `render.yaml`
-3. Configura las variables de entorno en el dashboard de Render:
-   - `GROQ_API_KEY`: Tu API key de Groq
-   - `FRONTEND_URL`: URL de tu frontend en producción
-   - `ALLOWED_ORIGINS`: Orígenes permitidos (opcional)
-
-### Opción 2: Configuración Manual
-
-1. Crea un nuevo Web Service en Render
-2. Conecta tu repositorio
-3. Configura los siguientes valores:
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-   - **Environment**: Python 3
-4. Agrega las variables de entorno necesarias
-
 ### Variables de Entorno Requeridas
 
-| Variable | Descripción | Requerida |
-|----------|-------------|-----------|
-| `ENV` | Entorno de ejecución (`development` o `production`) | No (default: development) |
-| `GROQ_API_KEY` | API Key de Groq para el LLM | Sí |
-| `FRONTEND_URL` | URL del frontend en producción | Sí (producción) |
-| `ALLOWED_ORIGINS` | Orígenes permitidos para CORS (separados por coma) | No |
+| Variable        | Descripción                                         | Requerida                    |
+|----------------|-----------------------------------------------------|------------------------------|
+| `ENV`          | Entorno de ejecución (`development` o `production`) | No (default: `development`)  |
+| `GROQ_API_KEY` | API Key de Groq para el LLM                         | Sí                           |
+| `FRONTEND_URL` | URL del frontend en producción                      | Sí (solo en producción)      |
+| `ALLOWED_ORIGINS` | Orígenes permitidos para CORS (separados por coma) | No                         |
 
 ## 📚 Endpoints Principales
 
@@ -115,24 +77,18 @@ Content-Type: multipart/form-data
 Body: file (documento a procesar)
 ```
 
-### Agregar Texto
-```
-POST /api/text
-Content-Type: application/json
-Body: {
-  "text": "texto a agregar",
-  "metadata": {...}
-}
-```
-
 ### Hacer Pregunta
 ```
 POST /api/ask
 Content-Type: application/json
 Body: {
-  "query": "tu pregunta aquí"
+  "question": "tu pregunta aquí",
+  "k": 5            // opcional, nº de chunks a recuperar (default: 5)
 }
 ```
+
+> El endpoint usa búsqueda semántica con FAISS (LangChain) y expansión de contexto
+> para recuperar chunks vecinos y mejorar la coherencia de las respuestas.
 
 ## 📖 Documentación API
 
@@ -148,7 +104,7 @@ Una vez iniciado el servidor en modo desarrollo, accede a:
 .
 ├── app/
 │   ├── llm/              # Cliente de Groq LLM
-│   ├── rag/              # Sistema RAG (embeddings, FAISS, retriever)
+│   ├── rag/              # Sistema RAG (embeddings, FAISS LangChain, retriever)
 │   ├── routes/           # Endpoints de la API
 │   ├── main.py           # Configuración principal
 │   └── schemas.py        # Modelos de datos
