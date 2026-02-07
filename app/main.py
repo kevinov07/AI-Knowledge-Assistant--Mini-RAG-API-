@@ -1,13 +1,16 @@
 import os
 import logging
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.routes import health, ask, upload
-from dotenv import load_dotenv
 
-load_dotenv()
+from app.db.database import init_db, engine
+from app.routes import health, ask, upload
 
 # Configurar logging
 logging.basicConfig(
@@ -41,16 +44,14 @@ logger.info(f"Allowed CORS origins: {ALLOWED_ORIGINS}")
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting application...")
-    # TODO: Inicializar conexión a base de datos aquí
-    # await init_db()
+    init_db()
     logger.info("Application startup complete")
     
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
-    # TODO: Cerrar conexión a base de datos aquí
-    # await close_db()
+    engine.dispose()
     logger.info("Application shutdown complete")
 
 app = FastAPI(
