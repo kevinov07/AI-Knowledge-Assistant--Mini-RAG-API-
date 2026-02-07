@@ -9,6 +9,7 @@ import pandas as pd
 import pypdf
 from docx import Document as DocxDocument
 
+import fitz
 
 def normalize_text_for_rag(text: str) -> str:
     """
@@ -87,58 +88,67 @@ class DocumentProcessor:
         """Procesa archivos de texto plano (.txt)."""
         try:
             return content.decode('utf-8')
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as e:
             # Intenta con otras codificaciones comunes
+            last_error = e
             for encoding in ['latin-1', 'iso-8859-1', 'cp1252']:
                 try:
                     return content.decode(encoding)
-                except UnicodeDecodeError:
+                except UnicodeDecodeError as e2:
+                    last_error = e2
                     continue
-            raise ValueError("No se pudo decodificar el archivo con ninguna codificación conocida")
+            raise ValueError("No se pudo decodificar el archivo con ninguna codificación conocida") from last_error
     
     @staticmethod
-    def process_pdf(content: bytes) -> str:
-        """
-        Procesa archivos PDF (.pdf).
-        - Usa modo no estricto para PDFs mal formados o con imágenes.
-        - Si está cifrado, intenta con contraseña vacía.
-        - Las páginas que son solo imágenes o fallan se ignoran.
-        """
+    def _extract_text_pymupdf(content: bytes) -> str:
+        """Extrae texto con PyMuPDF (principal para PDFs)."""
+        try:
+            doc = fitz.open(stream=content, filetype="pdf")
+            parts = [page.get_text().strip() for page in doc if page.get_text().strip()]
+            doc.close()
+            return "\n".join(parts)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _extract_text_pypdf(content: bytes) -> str:
+        """Extrae texto con pypdf (pure Python; mismo motor que PyPDF2)."""
         try:
             pdf_file = io.BytesIO(content)
-            try:
-                pdf_reader = pypdf.PdfReader(pdf_file, strict=False)
-            except TypeError:
-                pdf_reader = pypdf.PdfReader(pdf_file)
-            if getattr(pdf_reader, "is_encrypted", False) and pdf_reader.is_encrypted:
+            reader = pypdf.PdfReader(pdf_file, strict=False)
+            if getattr(reader, "is_encrypted", False) and reader.is_encrypted:
                 try:
-                    pdf_reader.decrypt("")
+                    reader.decrypt("")
                 except Exception:
                     pass
-            text_parts = []
-            try:
-                pages = pdf_reader.pages
-            except Exception:
-                pages = []
-            for page in pages:
+            parts = []
+            for page in reader.pages:
                 try:
                     text = page.extract_text()
                     if text and text.strip():
-                        text_parts.append(text.strip())
+                        parts.append(text.strip())
                 except Exception:
                     continue
-            full_text = "\n".join(text_parts)
-            if not full_text.strip():
-                raise ValueError(
-                    "No se extrajo texto del PDF: las páginas son solo imágenes (PDF escaneado). "
-                    "Sube un PDF con texto seleccionable o convierte el documento a texto antes."
-                )
-            return full_text
-        except ValueError:
-            raise
-        except Exception as e:
-            raise ValueError(f"Error al procesar PDF: {str(e)}")
-    
+            return "\n".join(parts)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def process_pdf(content: bytes) -> str:
+        """
+        Procesa PDF: PyMuPDF como principal, pypdf como fallback.
+        """
+        text = DocumentProcessor._extract_text_pymupdf(content)
+        if text.strip():
+            return text
+        text = DocumentProcessor._extract_text_pypdf(content)
+        if text.strip():
+            return text
+        raise ValueError(
+            "No se extrajo texto del PDF: las páginas parecen ser solo imágenes (PDF escaneado). "
+            "Sube un PDF con texto seleccionable o convierte el documento a texto antes de subirlo."
+        )
+
     @staticmethod
     def process_docx(content: bytes) -> str:
         """Procesa archivos Word (.docx)."""
@@ -167,7 +177,7 @@ class DocumentProcessor:
             
             return full_text
         except Exception as e:
-            raise ValueError(f"Error al procesar DOCX: {str(e)}")
+            raise ValueError(f"Error al procesar DOCX: {str(e)}") from e
     
     @staticmethod
     def process_markdown(content: bytes) -> str:
@@ -187,8 +197,8 @@ class DocumentProcessor:
                 raise ValueError("El archivo Markdown está vacío")
             
             return text
-        except UnicodeDecodeError:
-            raise ValueError("No se pudo decodificar el archivo Markdown")
+        except UnicodeDecodeError as e:
+            raise ValueError("No se pudo decodificar el archivo Markdown") from e
     
     @staticmethod
     def process_csv(content: bytes) -> str:
@@ -240,7 +250,7 @@ class DocumentProcessor:
             
             return full_text
         except Exception as e:
-            raise ValueError(f"Error al procesar CSV: {str(e)}")
+            raise ValueError(f"Error al procesar CSV: {str(e)}") from e
     
     @staticmethod
     def process_excel(content: bytes) -> str:
@@ -272,7 +282,7 @@ class DocumentProcessor:
         except ValueError:
             raise
         except Exception as e:
-            raise ValueError(f"Error al procesar Excel: {str(e)}")
+            raise ValueError(f"Error al procesar Excel: {str(e)}") from e
     
     @staticmethod
     def process_document(content: bytes, filename: str) -> str:
