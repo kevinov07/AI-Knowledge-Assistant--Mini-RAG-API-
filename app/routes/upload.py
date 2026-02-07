@@ -1,24 +1,26 @@
 """
 Subida de documentos: múltiples formatos vía DocumentProcessor.
 
-Guarda chunks en store (CHUNKS_METADATA, CHUNK_IDS) y en vectorstore FAISS (LangChain).
+Indexa en BD (documents + chunks con embeddings) para consultas RAG posteriores.
 El texto se normaliza (especialmente PDF) para mejorar la calidad en búsqueda semántica.
 """
 from typing import List
+import logging
 import uuid
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
 from app.rag.chunking import chunk_text
 from app.rag.document_processor import DocumentProcessor
-from app.rag.store import CHUNKS_METADATA, CHUNK_IDS
 from app.schemas import UploadResponse
-from app.rag.vectorstore import add_documents, init_vectorstore, is_initialized
-from app.rag.embeddings import get_langchain_embeddings
-from langchain_core.documents import Document
+from app.rag.embeddings import get_embeddings
+from app.db.models import Document as DocumentModel, Chunk as ChunkModel
+from app.db.database import get_db
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = ", ".join(sorted(DocumentProcessor.SUPPORTED_FORMATS))
 
@@ -30,6 +32,7 @@ SUPPORTED_EXTENSIONS = ", ".join(sorted(DocumentProcessor.SUPPORTED_FORMATS))
     response_description="Lista de archivos subidos correctamente, fallos (si los hay) y número de documentos indexados.",
 )
 async def upload_files(
+    db: Session = Depends(get_db),
     files: List[UploadFile] = File(
         ...,
         description=f"Uno o más archivos a procesar. Formatos soportados: {SUPPORTED_EXTENSIONS}.",
@@ -90,44 +93,84 @@ async def upload_files(
                 })
                 continue
 
-            document_id = str(uuid.uuid4())
-            documents = [
-                Document(
-                    page_content=chunk.strip(), 
-                    metadata={
-                        "source": file.filename,
-                        "document_id": document_id,
-                        "chunk_id": f"{document_id}_{i}",
-                        "chunk_index": i,
-                        "filename": file.filename
-                    }
-                )
-                for i, chunk in enumerate(chunks)
-            ]
-            
-            if not is_initialized():
-                init_vectorstore(documents, get_langchain_embeddings())
-            else:
-                add_documents(documents)
+            # document_id = str(uuid.uuid4())
+            # documents = [
+            #     Document(
+            #         page_content=chunk.strip(), 
+            #         metadata={
+            #             "source": file.filename,
+            #             "document_id": document_id,
+            #             "chunk_id": f"{document_id}_{i}",
+            #             "chunk_index": i,
+            #             "filename": file.filename
+            #         }
+            #     )
+            #     for i, chunk in enumerate(chunks)
+            # ]
 
-            for i, chunk in enumerate(chunks):
+            document_id = str(uuid.uuid4())
+            document = DocumentModel(
+                id=document_id,
+                filename=file.filename,
+            )
+            # Embeddings en batch (más eficiente que chunk por chunk)
+            chunk_texts = [c.strip() for c in chunks]
+            embeddings = get_embeddings(chunk_texts)
+            if len(embeddings) != len(chunk_texts):
+                raise RuntimeError("Número de embeddings no coincide con número de chunks")
+
+            db.add(document)
+            db.flush()
+            
+            # if not is_initialized():
+            #     init_vectorstore(documents, get_langchain_embeddings())
+            # else:
+            #     add_documents(documents)
+            chunks_models = []
+            for i, chunk in enumerate(chunk_texts):
                 chunk_id = f"{document_id}_{i}"
 
-                CHUNK_IDS.append(chunk_id)
-                CHUNKS_METADATA[chunk_id] = {
-                    "document_id": document_id,
-                    "chunk_index": i,
-                    "text": chunk.strip(),
-                    "filename": file.filename,
-                }
+                # CHUNK_IDS.append(chunk_id)
+                # CHUNKS_METADATA[chunk_id] = {
+                #     "document_id": document_id,
+                #     "chunk_index": i,
+                #     "text": chunk.strip(),
+                #     "filename": file.filename,
+                # }
+                embedding = embeddings[i]
+                chunk_model = ChunkModel(
+                    id=chunk_id,
+                    document_id=document_id,
+                    chunk_index=i,
+                    filename=file.filename,
+                    text=chunk,
+                    embedding=embedding,
+                )
+                chunks_models.append(chunk_model)
+            db.add_all(chunks_models)
+            # Commit por archivo: si este archivo va bien, se persiste aunque el siguiente falle.
+            db.commit()
             uploaded_files.append(file.filename)
 
         except ValueError as e:
-            failed_files.append({"filename": file.filename, "error": str(e)})
-        except Exception as e:
+            # Errores de validación/control (texto vacío, chunks, etc.)
+            db.rollback()
+            logger.warning(
+                "Error de validación al procesar archivo %s: %s",
+                file.filename,
+                e,
+            )
             failed_files.append({
                 "filename": file.filename,
-                "error": f"Error al procesar: {str(e)}"
+                "error": str(e),
+            })
+        except Exception as e:
+            # Errores inesperados (BD, red, etc.). No exponer detalle al cliente.
+            db.rollback()
+            logger.exception("Error interno al procesar archivo %s", file.filename)
+            failed_files.append({
+                "filename": file.filename,
+                "error": "Error interno al procesar este archivo. Revisa los logs del servidor para más detalles.",
             })
 
     if not uploaded_files:
