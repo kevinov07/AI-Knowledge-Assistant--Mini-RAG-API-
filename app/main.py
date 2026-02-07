@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.routes import health, text, ask, upload
+from app.routes import health, ask, upload
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -87,7 +87,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 # Incluir routers con prefijo /api
 app.include_router(health.router, prefix="/api")
-app.include_router(text.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 
