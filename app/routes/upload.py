@@ -112,6 +112,7 @@ async def upload_files(
             document = DocumentModel(
                 id=document_id,
                 filename=file.filename,
+                size=file.size,
             )
             # Embeddings en batch (más eficiente que chunk por chunk)
             chunk_texts = [c.strip() for c in chunks]
