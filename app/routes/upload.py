@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.rag.chunking import chunk_text
 from app.rag.document_processor import DocumentProcessor
-from app.schemas import UploadResponse
+from app.schemas import UploadResponse, UploadedDocument
 from app.rag.embeddings import get_embeddings
 from app.db.models import Document as DocumentModel, Chunk as ChunkModel
 from app.db.database import get_db
@@ -53,7 +53,7 @@ async def upload_files(
     `failed_files` con el motivo; el resto se procesa igual. Si **todos** fallan, responde 400.
 
     **Respuesta:**
-    - `files_uploaded`: nombres de los archivos indexados correctamente.
+    - `files_uploaded`: lista de { id, filename } de los documentos indexados correctamente.
     - `failed_files`: lista de { filename, error } para los que fallaron.
     - `documents_indexed`: cantidad de documentos indexados (= len(files_uploaded)).
     """
@@ -151,7 +151,7 @@ async def upload_files(
             db.add_all(chunks_models)
             # Commit por archivo: si este archivo va bien, se persiste aunque el siguiente falle.
             db.commit()
-            uploaded_files.append(file.filename)
+            uploaded_files.append(UploadedDocument(id=document_id, filename=file.filename))
 
         except ValueError as e:
             # Errores de validación/control (texto vacío, chunks, etc.)

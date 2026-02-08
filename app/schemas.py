@@ -27,12 +27,19 @@ class FailedFile(BaseModel):
     error: str = Field(..., description="Motivo del fallo (ej. formato no soportado, documento vacío).")
 
 
+class UploadedDocument(BaseModel):
+    """Documento creado e indexado correctamente."""
+
+    id: str = Field(..., description="ID único del documento en la BD.")
+    filename: str = Field(..., description="Nombre del archivo subido.")
+
+
 class UploadResponse(BaseModel):
     """Respuesta del endpoint POST /api/upload."""
 
-    files_uploaded: list[str] = Field(
+    files_uploaded: list[UploadedDocument] = Field(
         ...,
-        description="Lista de nombres de archivos procesados e indexados correctamente.",
+        description="Lista de documentos procesados e indexados correctamente (id y filename).",
     )
     failed_files: list[FailedFile] = Field(
         default_factory=list,
