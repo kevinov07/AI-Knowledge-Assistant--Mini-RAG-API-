@@ -20,7 +20,7 @@ class Document(Base):
 class Chunk(Base):
     __tablename__ = "chunks"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id"), nullable=False)
+    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(384), nullable=False)
@@ -29,11 +29,20 @@ class Chunk(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class Session(Base):
+    """Sesión de chat: agrupa los mensajes de una conversación (id = session_id del cliente)."""
+    __tablename__ = "sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # UUID que envía el frontend
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-# CHUNK_IDS.append(chunk_id)
-# CHUNKS_METADATA[chunk_id] = {
-#     "document_id": document_id,
-#     "chunk_index": i,
-#     "text": chunk.strip(),
-#     "filename": file.filename,
-# }
+
+class ChatMessage(Base):
+    """Mensaje de una conversación; pertenece a una Session."""
+    __tablename__ = "chat_messages"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id: Mapped[str] = mapped_column(String(64), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # "user" | "assistant"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+

@@ -183,8 +183,8 @@ async def upload_files(
             },
         )
 
-    return {
-        "files_uploaded": uploaded_files,
-        "failed_files": failed_files,
-        "documents_indexed": len(uploaded_files)
-    }
+    return UploadResponse(
+        files_uploaded=uploaded_files,
+        failed_files=failed_files,
+        documents_indexed=len(uploaded_files),
+    )

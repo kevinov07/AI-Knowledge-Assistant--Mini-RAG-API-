@@ -7,14 +7,16 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.db.models import Document, Chunk
+from app.schemas import DocumentListItem, DocumentTextResponse
 
 router = APIRouter()
 
 
 @router.get(
     "/documents",
+    response_model=list[DocumentListItem],
     summary="Listar documentos indexados",
-    response_description="Lista de documentos con id, nombre y cantidad de chunks.",
+    response_description="Lista de documentos con id, nombre, tamaño y cantidad de chunks.",
 )
 def list_documents(db: Session = Depends(get_db)):
     """
@@ -44,24 +46,23 @@ def list_documents(db: Session = Depends(get_db)):
         .order_by(Document.created_at.desc())
     )
     rows = db.execute(stmt).fetchall()
-    print(rows)
-
     return [
-        {
-            "id": row.id,
-            "filename": row.filename,
-            "size": row.size,
-            "created_at": row.created_at.isoformat() if row.created_at else None,
-            "chunk_count": row.chunk_count or 0,
-        }
+        DocumentListItem(
+            id=row.id,
+            filename=row.filename,
+            size=row.size,
+            created_at=row.created_at.isoformat() if row.created_at else None,
+            chunk_count=row.chunk_count or 0,
+        )
         for row in rows
     ]
 
 
 @router.get(
     "/documents/{document_id}/text",
+    response_model=DocumentTextResponse,
     summary="Obtener el texto completo de un documento",
-    response_description="Texto concatenado de todos los chunks del documento.",
+    response_description="Documento con texto concatenado de todos los chunks.",
 )
 def get_document_text(document_id: str, db: Session = Depends(get_db)):
     """
@@ -82,8 +83,8 @@ def get_document_text(document_id: str, db: Session = Depends(get_db)):
     parts = [row[0] for row in rows]
     full_text = "\n\n".join(parts) if parts else ""
 
-    return {
-        "document_id": document_id,
-        "filename": doc.filename,
-        "text": full_text,
-    }
+    return DocumentTextResponse(
+        document_id=document_id,
+        filename=doc.filename,
+        text=full_text,
+    )
