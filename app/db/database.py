@@ -6,10 +6,14 @@ from sqlalchemy.orm import sessionmaker, Session
 from app.db.models import Base
 from pgvector.psycopg2 import register_vector
 
-DB_URL = os.getenv("DATABASE_URL")
+ENV = os.getenv("ENV")
+if ENV == "development":
+    DB_URL = os.getenv("DATABASE_URL_LOCAL")
+else:
+    DB_URL = os.getenv("DATABASE_URL")
+
 if not DB_URL:
     raise ValueError("DATABASE_URL is not set")
-
 engine = create_engine(DB_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine)
 

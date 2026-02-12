@@ -5,6 +5,7 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.12.1
 attrs==25.4.0
+bcrypt==5.0.0
 certifi==2026.1.4
 charset-normalizer==3.4.4
 click==8.3.1
@@ -99,6 +100,5 @@ urllib3==2.6.3
 uuid_utils==0.14.0
 uvicorn==0.40.0
 xxhash==3.6.0
-xlrd==2.0.1
 yarl==1.22.0
 zstandard==0.25.0

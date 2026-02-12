@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from langchain_core.documents import Document
 
-from app.db.models import Chunk
+from app.db.models import Chunk, Document as DocumentModel
 
 
 def similarity_search_chunks_pgvector(
@@ -9,6 +9,7 @@ def similarity_search_chunks_pgvector(
     question: str,
     k: int = 5,
     get_embedding=None,
+    collection_id: str | None = None,
 ):
     """
     Equivalente a similarity_search_with_score de FAISS usando pgvector.
@@ -21,6 +22,7 @@ def similarity_search_chunks_pgvector(
         question: Texto de la pregunta.
         k: Número máximo de chunks a devolver.
         get_embedding: Función (str) -> list[float]. Si no se pasa, se usa app.rag.embeddings.get_embedding.
+        collection_id: ID de colección opcional. Si se provee, filtra solo chunks de esa colección.
 
     Returns:
         Lista de tuplas (Document, score), donde Document tiene page_content y metadata
@@ -43,6 +45,13 @@ def similarity_search_chunks_pgvector(
         .order_by(distance_col)
         .limit(k)
     )
+    
+    # Filtrar por colección si se provee
+    if collection_id:
+        stmt = stmt.join(DocumentModel, Chunk.document_id == DocumentModel.id).where(
+            DocumentModel.collection_id == collection_id
+        )
+    
     rows = session.execute(stmt).fetchall()
 
     out = []

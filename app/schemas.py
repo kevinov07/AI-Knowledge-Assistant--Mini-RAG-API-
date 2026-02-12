@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TextRequest(BaseModel):
@@ -47,6 +47,35 @@ class QuestionRequest(BaseModel):
         description="Historial opcional de la conversación. Si no se envía y sí session_id, se carga desde BD.",
     )
 
+class CollectionCreate(BaseModel):
+    """Cuerpo de la petición para el endpoint /api/collections."""
+    name: str = Field(..., description="Nombre de la colección.")
+    description: str | None = Field(default=None, description="Descripción de la colección.")
+    is_public: bool = Field(..., description="Indica si la colección es pública.")
+    code: str | None = Field(default=None, description="Código de acceso; obligatorio si is_public es False.")
+
+    @model_validator(mode="after")
+    def private_must_have_code(self) -> "CollectionCreate":
+        if self.is_public is False and (self.code is None or (isinstance(self.code, str) and not self.code.strip())):
+            raise ValueError("Las colecciones privadas deben tener un código de acceso.")
+        return self
+
+
+
+class UnlockCollectionRequest(BaseModel):
+    """Cuerpo de la petición para el endpoint /api/collections/{collection_id}/unlock."""
+    code: str | None = Field(
+        default=None,
+        description="Código de acceso de la colección. Requerido solo para colecciones privadas.",
+    )
+
+
+class UnlockCollectionResponse(BaseModel):
+    """Respuesta del endpoint /api/collections/{collection_id}/unlock."""
+    unlocked: bool = Field(..., description="True si el desbloqueo fue exitoso.")
+    access_token: str = Field(..., description="Token JWT temporal para acceder a la colección.")
+    token_type: str = Field(default="bearer", description="Tipo de token (siempre 'bearer').")
+    expires_in: int = Field(..., description="Segundos hasta que expire el token.")
 
 class FailedFile(BaseModel):
     """Entrada de la lista de archivos fallidos en la respuesta de upload."""
@@ -97,6 +126,17 @@ class AskResponse(BaseModel):
     results: list[AskResultItem] = Field(..., description="Chunks más similares (semillas de la búsqueda).")
     context_used: list[str] = Field(..., description="Fragmentos de texto enviados al LLM (semillas + vecinos).")
     session_id: str = Field(..., description="ID de sesión (creado por el backend si no se envió).")
+
+
+class CollectionResponse(BaseModel):
+    """Respuesta del endpoint /api/collections."""
+    id: str = Field(..., description="ID de la colección.")
+    name: str = Field(..., description="Nombre de la colección.")
+    description: str | None = Field(default=None, description="Descripción de la colección.")
+    is_public: bool = Field(..., description="Indica si la colección es pública.")
+    code: str | None = Field(default=None, description="Código de acceso a la colección.")
+    created_at: str | None = Field(None, description="Fecha de creación de la colección (ISO 8601).")
+    updated_at: str | None = Field(None, description="Fecha de última actualización de la colección (ISO 8601).")
 
 
 class DocumentListItem(BaseModel):

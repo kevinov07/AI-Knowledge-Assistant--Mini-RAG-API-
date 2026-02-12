@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.db.database import init_db, engine
-from app.routes import health, ask, upload, documents, sessions
+from app.routes import health, ask, upload, documents, sessions, collections
 
 # Configurar logging
 logging.basicConfig(
@@ -92,6 +92,7 @@ app.include_router(ask.router, prefix="/api")
 app.include_router(upload.router, prefix="/api")
 app.include_router(documents.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
+app.include_router(collections.router, prefix="/api")
 
 # Endpoint raíz
 @app.get("/")
