@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from app.db.database import get_db
@@ -16,6 +16,12 @@ from app.schemas import (
     QuestionRequest,
     AskResponse,
     AskResultItem,
+    DeleteDocumentsRequest,
+    DeleteDocumentsResponse,
+    PaginatedCollectionResponse,
+    PaginatedDocumentResponse,
+    PaginatedMessageResponse,
+    PaginationMeta,
 )
 from app.db.models import (
     Collection as CollectionModel,
@@ -35,23 +41,62 @@ router = APIRouter()
 
 @router.get(
     "/collections",
-    response_model=list[CollectionResponse],
+    response_model=PaginatedCollectionResponse,
     response_model_exclude_none=True,
-    summary="Obtener todas las colecciones",
-    response_description="Listado de colecciones (el código nunca se devuelve).",
+    summary="Obtener colecciones (paginado)",
+    response_description="Listado paginado de colecciones con conteo de documentos y mensajes.",
 )
-def get_collections(db: Session = Depends(get_db)):
-    stmt = select(CollectionModel).order_by(CollectionModel.created_at.desc())
-    rows = db.execute(stmt).scalars().all()
-    return [
+def get_collections(
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1, description="Página (1-based)."),
+    page_size: int = Query(10, ge=1, le=100, description="Elementos por página."),
+):
+    # Subconsultas para contar documentos y mensajes por colección
+    doc_count_subq = (
+        select(DocumentModel.collection_id, func.count(DocumentModel.id).label("doc_count"))
+        .group_by(DocumentModel.collection_id)
+        .subquery()
+    )
+    msg_count_subq = (
+        select(SessionModel.collection_id, func.count(ChatMessageModel.id).label("msg_count"))
+        .join(ChatMessageModel, ChatMessageModel.session_id == SessionModel.id)
+        .group_by(SessionModel.collection_id)
+        .subquery()
+    )
+    base_stmt = (
+        select(
+            CollectionModel,
+            func.coalesce(doc_count_subq.c.doc_count, 0).label("document_count"),
+            func.coalesce(msg_count_subq.c.msg_count, 0).label("message_count"),
+        )
+        .outerjoin(doc_count_subq, CollectionModel.id == doc_count_subq.c.collection_id)
+        .outerjoin(msg_count_subq, CollectionModel.id == msg_count_subq.c.collection_id)
+        .order_by(CollectionModel.created_at.desc())
+    )
+    # Contar total
+    count_stmt = select(func.count()).select_from(CollectionModel)
+    total = db.execute(count_stmt).scalar_one()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    # Paginar
+    offset = (page - 1) * page_size
+    stmt = base_stmt.offset(offset).limit(page_size)
+    rows = db.execute(stmt).fetchall()
+    items = [
         CollectionResponse(
-            id=row.id,
-            name=row.name,
-            description=row.description,
-            is_public=row.is_public,
+            id=row[0].id,
+            name=row[0].name,
+            description=row[0].description,
+            is_public=row[0].is_public,
+            created_at=row[0].created_at.isoformat() if row[0].created_at else None,
+            document_count=int(row.document_count),
+            message_count=int(row.message_count),
         )
         for row in rows
     ]
+    return PaginatedCollectionResponse(
+        items=items,
+        pagination=PaginationMeta(page=page, page_size=page_size, total=total, total_pages=total_pages),
+    )
 
 
 
@@ -81,6 +126,8 @@ def create_collection(collection: CollectionCreate, db: Session = Depends(get_db
         name=collection_model.name,
         description=collection_model.description,
         is_public=collection_model.is_public,
+        document_count=0,
+        message_count=0,
     )
 
 @router.post(
@@ -116,18 +163,44 @@ def unlock_collection(
     )
 
 
-@router.get(
-    "/collections/{collection_id}/documents",
-    response_model=list[DocumentListItem],
-    summary="Listar documentos de una colección",
-    response_description="Lista de documentos con id, nombre, tamaño y cantidad de chunks.",
+@router.delete(
+    "/collections/{collection_id}",
+    summary="Eliminar una colección",
+    response_description="Colección eliminada (incluye documentos, chunks, sesión y mensajes).",
 )
-def get_collection_documents(
+def delete_collection(
     collection: CollectionModel = Depends(get_collection_with_access),
     db: Session = Depends(get_db),
 ):
     """
-    Devuelve todos los documentos indexados en esta colección.
+    Elimina una colección y todos sus recursos asociados por CASCADE:
+    - Documentos
+    - Chunks
+    - Sesión de chat
+    - Mensajes
+    
+    Para colecciones públicas: no requiere token.
+    Para colecciones privadas: requiere token obtenido con POST /collections/{id}/unlock.
+    """
+    db.delete(collection)
+    db.commit()
+    return {"deleted": True}
+
+
+@router.get(
+    "/collections/{collection_id}/documents",
+    response_model=PaginatedDocumentResponse,
+    summary="Listar documentos de una colección (paginado)",
+    response_description="Lista paginada de documentos con id, nombre, tamaño y cantidad de chunks.",
+)
+def get_collection_documents(
+    collection: CollectionModel = Depends(get_collection_with_access),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1, description="Página (1-based)."),
+    page_size: int = Query(10, ge=1, le=100, description="Elementos por página."),
+):
+    """
+    Devuelve documentos indexados en esta colección (paginado).
     
     Para colecciones públicas: no requiere token.
     Para colecciones privadas: requiere token obtenido con POST /collections/{id}/unlock.
@@ -140,7 +213,7 @@ def get_collection_documents(
         .group_by(ChunkModel.document_id)
         .subquery()
     )
-    stmt = (
+    base_stmt = (
         select(
             DocumentModel.id,
             DocumentModel.filename,
@@ -152,8 +225,11 @@ def get_collection_documents(
         .where(DocumentModel.collection_id == collection_id)
         .order_by(DocumentModel.created_at.desc())
     )
-    rows = db.execute(stmt).fetchall()
-    return [
+    total = db.execute(select(func.count()).select_from(DocumentModel).where(DocumentModel.collection_id == collection_id)).scalar_one()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+    rows = db.execute(base_stmt.offset(offset).limit(page_size)).fetchall()
+    items = [
         DocumentListItem(
             id=row.id,
             filename=row.filename,
@@ -163,20 +239,63 @@ def get_collection_documents(
         )
         for row in rows
     ]
+    return PaginatedDocumentResponse(
+        items=items,
+        pagination=PaginationMeta(page=page, page_size=page_size, total=total, total_pages=total_pages),
+    )
 
 
-@router.get(
-    "/collections/{collection_id}/messages",
-    response_model=list[ChatMessageSchema],
-    summary="Obtener mensajes del chat de una colección",
-    response_description="Lista de mensajes ordenados cronológicamente.",
+@router.delete(
+    "/collections/{collection_id}/documents",
+    response_model=DeleteDocumentsResponse,
+    summary="Eliminar varios documentos de una colección",
+    response_description="Cantidad e IDs de documentos eliminados.",
 )
-def get_collection_messages(
+def delete_collection_documents(
+    payload: DeleteDocumentsRequest,
     collection: CollectionModel = Depends(get_collection_with_access),
     db: Session = Depends(get_db),
 ):
     """
-    Devuelve el historial de mensajes del chat de esta colección.
+    Elimina uno o más documentos de una colección.
+    Solo se eliminan documentos que pertenecen a esta colección (los demás se ignoran).
+    
+    Los chunks se eliminan automáticamente por CASCADE.
+    
+    Para colecciones públicas: no requiere token.
+    Para colecciones privadas: requiere token obtenido con POST /collections/{id}/unlock.
+    """
+    collection_id = collection.id
+    deleted_ids: list[str] = []
+    
+    for doc_id in payload.document_ids:
+        doc = db.get(DocumentModel, doc_id)
+        if doc and doc.collection_id == collection_id:
+            db.delete(doc)
+            deleted_ids.append(doc_id)
+    
+    db.commit()
+    
+    return DeleteDocumentsResponse(
+        deleted_count=len(deleted_ids),
+        deleted_ids=deleted_ids,
+    )
+
+
+@router.get(
+    "/collections/{collection_id}/messages",
+    response_model=PaginatedMessageResponse,
+    summary="Obtener mensajes del chat de una colección (paginado)",
+    response_description="Lista paginada de mensajes ordenados cronológicamente.",
+)
+def get_collection_messages(
+    collection: CollectionModel = Depends(get_collection_with_access),
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1, description="Página (1-based)."),
+    page_size: int = Query(20, ge=1, le=100, description="Elementos por página."),
+):
+    """
+    Devuelve el historial de mensajes del chat de esta colección (paginado).
     
     Como cada colección tiene una sesión asociada (1:1), devuelve los mensajes
     de esa sesión ordenados por fecha de creación.
@@ -192,16 +311,25 @@ def get_collection_messages(
     ).scalar_one_or_none()
     
     if not session:
-        return []  # No hay sesión aún, devolver lista vacía
+        return PaginatedMessageResponse(
+            items=[],
+            pagination=PaginationMeta(page=1, page_size=page_size, total=0, total_pages=0),
+        )
     
-    # Obtener mensajes de la sesión
+    total = db.execute(
+        select(func.count()).select_from(ChatMessageModel).where(ChatMessageModel.session_id == session.id)
+    ).scalar_one()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
     messages = db.execute(
         select(ChatMessageModel)
         .where(ChatMessageModel.session_id == session.id)
-        .order_by(ChatMessageModel.created_at.asc())
+        .order_by(ChatMessageModel.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
     ).scalars().all()
     
-    return [
+    items = [
         ChatMessageSchema(
             id=msg.id,
             role=msg.role,
@@ -210,6 +338,10 @@ def get_collection_messages(
         )
         for msg in messages
     ]
+    return PaginatedMessageResponse(
+        items=items,
+        pagination=PaginationMeta(page=page, page_size=page_size, total=total, total_pages=total_pages),
+    )
 
 
 MAX_CONTEXT_CHARS = int(os.getenv("GROQ_MAX_CONTEXT_CHARS", "32000"))

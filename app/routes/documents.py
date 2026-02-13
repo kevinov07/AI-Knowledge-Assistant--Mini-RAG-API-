@@ -1,26 +1,30 @@
 """
 Endpoints para listar y consultar documentos indexados.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.db.models import Document, Chunk
-from app.schemas import DocumentListItem, DocumentTextResponse
+from app.schemas import DocumentListItem, DocumentTextResponse, PaginatedDocumentResponse, PaginationMeta
 
 router = APIRouter()
 
 
 @router.get(
     "/documents",
-    response_model=list[DocumentListItem],
-    summary="Listar documentos indexados",
-    response_description="Lista de documentos con id, nombre, tamaño y cantidad de chunks.",
+    response_model=PaginatedDocumentResponse,
+    summary="Listar documentos indexados (paginado)",
+    response_description="Lista paginada de documentos con id, nombre, tamaño y cantidad de chunks.",
 )
-def list_documents(db: Session = Depends(get_db)):
+def list_documents(
+    db: Session = Depends(get_db),
+    page: int = Query(1, ge=1, description="Página (1-based)."),
+    page_size: int = Query(10, ge=1, le=100, description="Elementos por página."),
+):
     """
-    Devuelve todos los documentos indexados en la BD.
+    Devuelve documentos indexados en la BD (paginado).
 
     Cada documento incluye:
     - **id**: identificador único.
@@ -34,7 +38,7 @@ def list_documents(db: Session = Depends(get_db)):
         .group_by(Chunk.document_id)
         .subquery()
     )
-    stmt = (
+    base_stmt = (
         select(
             Document.id,
             Document.filename,
@@ -45,8 +49,11 @@ def list_documents(db: Session = Depends(get_db)):
         .outerjoin(chunk_count_subq, Document.id == chunk_count_subq.c.document_id)
         .order_by(Document.created_at.desc())
     )
-    rows = db.execute(stmt).fetchall()
-    return [
+    total = db.execute(select(func.count()).select_from(Document)).scalar_one()
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+    rows = db.execute(base_stmt.offset(offset).limit(page_size)).fetchall()
+    items = [
         DocumentListItem(
             id=row.id,
             filename=row.filename,
@@ -56,6 +63,10 @@ def list_documents(db: Session = Depends(get_db)):
         )
         for row in rows
     ]
+    return PaginatedDocumentResponse(
+        items=items,
+        pagination=PaginationMeta(page=page, page_size=page_size, total=total, total_pages=total_pages),
+    )
 
 
 @router.get(

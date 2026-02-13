@@ -1,6 +1,32 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+class PaginationMeta(BaseModel):
+    """Metadata de paginación para respuestas paginadas."""
+    page: int = Field(..., description="Página actual (1-based).")
+    page_size: int = Field(..., description="Cantidad de elementos por página.")
+    total: int = Field(..., description="Total de elementos.")
+    total_pages: int = Field(..., description="Total de páginas.")
+
+
+class PaginatedCollectionResponse(BaseModel):
+    """Respuesta paginada de GET /collections."""
+    items: list["CollectionResponse"] = Field(..., description="Lista de colecciones.")
+    pagination: PaginationMeta = Field(..., description="Metadata de paginación.")
+
+
+class PaginatedDocumentResponse(BaseModel):
+    """Respuesta paginada de listados de documentos."""
+    items: list["DocumentListItem"] = Field(..., description="Lista de documentos.")
+    pagination: PaginationMeta = Field(..., description="Metadata de paginación.")
+
+
+class PaginatedMessageResponse(BaseModel):
+    """Respuesta paginada de listados de mensajes."""
+    items: list["ChatMessage"] = Field(..., description="Lista de mensajes.")
+    pagination: PaginationMeta = Field(..., description="Metadata de paginación.")
+
+
 class TextRequest(BaseModel):
     text: str
 
@@ -77,6 +103,22 @@ class UnlockCollectionResponse(BaseModel):
     token_type: str = Field(default="bearer", description="Tipo de token (siempre 'bearer').")
     expires_in: int = Field(..., description="Segundos hasta que expire el token.")
 
+
+class DeleteDocumentsRequest(BaseModel):
+    """Cuerpo de la petición para el endpoint DELETE /collections/{collection_id}/documents."""
+    document_ids: list[str] = Field(
+        ...,
+        min_length=1,
+        description="Lista de IDs de documentos a eliminar.",
+    )
+
+
+class DeleteDocumentsResponse(BaseModel):
+    """Respuesta del endpoint DELETE /collections/{collection_id}/documents."""
+    deleted_count: int = Field(..., description="Cantidad de documentos eliminados.")
+    deleted_ids: list[str] = Field(..., description="IDs de los documentos eliminados.")
+
+
 class FailedFile(BaseModel):
     """Entrada de la lista de archivos fallidos en la respuesta de upload."""
 
@@ -137,6 +179,8 @@ class CollectionResponse(BaseModel):
     code: str | None = Field(default=None, description="Código de acceso a la colección.")
     created_at: str | None = Field(None, description="Fecha de creación de la colección (ISO 8601).")
     updated_at: str | None = Field(None, description="Fecha de última actualización de la colección (ISO 8601).")
+    document_count: int = Field(0, description="Número de documentos en la colección.")
+    message_count: int = Field(0, description="Número de mensajes en el chat de la colección.")
 
 
 class DocumentListItem(BaseModel):
@@ -166,3 +210,9 @@ class SessionResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Respuesta de GET /api/health."""
     status: str = Field(..., description="'ok' si el servicio está en marcha.")
+
+
+# Resolver referencias hacia adelante en modelos paginados
+PaginatedCollectionResponse.model_rebuild()
+PaginatedDocumentResponse.model_rebuild()
+PaginatedMessageResponse.model_rebuild()
