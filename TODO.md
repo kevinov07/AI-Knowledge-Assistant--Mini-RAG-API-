@@ -25,6 +25,11 @@
   - Agregar funcionalidad para crear documentos directamente escribiendo texto en un input dentro de la aplicación
   - Permitir editar y guardar documentos creados
 
+- [ ] **Visualización de documentos en el frontend (preview por texto)**
+  - Usar el texto plano que devuelve `GET /api/documents/{id}/text` para mostrar una vista previa del documento (solo visualización, no descarga del archivo original).
+  - Variar la presentación según la extensión del archivo (`filename`): `.md` → renderizar como Markdown; `.txt` → texto con saltos de línea; `.pdf`/`.docx` → mismo texto en vista tipo documento (legible); `.csv` → opcionalmente parsear y mostrar como tabla.
+  - Objetivo: que el usuario vea qué contenido está indexado sin guardar ni servir el binario original.
+
 - [x] **Soporte para múltiples formatos**
   - ✅ Formatos soportados en el backend (según `DocumentProcessor`):
     - `.txt` — texto plano

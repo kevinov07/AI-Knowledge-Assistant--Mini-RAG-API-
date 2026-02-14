@@ -1,33 +1,35 @@
 """
 Endpoint para consultas RAG: búsqueda semántica + expansión de contexto + respuesta con LLM.
+Soporta historial de chat por session_id (guardado en BD) o enviado en el body.
+Si el cliente no envía session_id, el backend crea uno y lo devuelve para las siguientes peticiones.
 """
 import os
+import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.db.models import Chunk
+from app.db.models import Chunk, ChatMessage, Session as SessionModel
 from app.llm.groq_client import generate_answer
-from app.schemas import QuestionRequest
+from app.schemas import QuestionRequest, AskResponse
 from app.db.database import get_db
 from app.rag.embeddings import get_embedding
 from app.rag.retriever import (
     similarity_search_chunks_pgvector,
     get_context_chunks_from_db,
 )
-# Código FAISS/store (comentado al usar pgvector + BD):
-# from app.rag.vectorstore import get_vectorstore, is_initialized
-# from app.rag.retriever import get_context_chunks
-# from app.rag.store import CHUNKS_METADATA
 
 MAX_CONTEXT_CHARS = int(os.getenv("GROQ_MAX_CONTEXT_CHARS", "32000"))
+MAX_HISTORY_LOAD = int(os.getenv("ASK_MAX_HISTORY_LOAD", "20"))  # mensajes a cargar desde BD por sesión
 
 router = APIRouter()
 
 
 @router.post(
     "/ask",
+    response_model=AskResponse,
     summary="Hacer una pregunta sobre los documentos",
-    response_description="Pregunta, respuesta generada y chunks recuperados con sus scores.",
+    response_description="Pregunta, respuesta generada, chunks recuperados y session_id.",
 )
 async def ask_question(request: QuestionRequest, db: Session = Depends(get_db)):
     """
@@ -42,17 +44,37 @@ async def ask_question(request: QuestionRequest, db: Session = Depends(get_db)):
     **Requisito:** Debe haber documentos subidos previamente (`POST /api/upload`).
     Si no hay chunks en la BD, devuelve error indicándolo.
 
-    **Respuesta:**
-    - `question`: la pregunta enviada.
-    - `answer`: texto generado por el LLM.
-    - `results`: los **k chunks más similares** (semillas de la búsqueda), con `text`, `document_id`, `chunk_index` y `score`.
-    - `context_used`: los **fragmentos de texto realmente enviados al LLM** (semillas + vecinos ±2 por cada una, sin duplicados, posiblemente truncados por límite del modelo). Es el contexto con el que se generó la respuesta.
+    **Historial de chat:**
+    - Si envías `session_id`, se carga el historial desde BD y se guarda este turno en esa sesión.
+    - Si **no** envías `session_id`, el backend crea una nueva sesión, guarda este turno y devuelve `session_id` en la respuesta; el cliente debe guardarlo y enviarlo en las siguientes peticiones para tener conversación continua.
+    - Opcionalmente puedes enviar `history` en el body en lugar de depender de la BD.
+
+    **Respuesta:** Siempre incluye `session_id` (creado por el backend si no lo enviaste), además de `question`, `answer`, `results`, `context_used`.
     """
-    # Comprobar que hay chunks en la BD (equivalente a is_initialized() con FAISS)
-    # if db.execute(text("SELECT 1 FROM chunks LIMIT 1")).fetchone() is None:
-    #     return {"error": "No hay documentos indexados. Por favor, suba documentos primero."}
     if not db.query(Chunk).first():
-        return {"error": "No hay documentos indexados. Por favor, suba documentos primero."}
+        raise HTTPException(
+            status_code=503,
+            detail="No hay documentos indexados. Por favor, suba documentos primero.",
+        )
+
+    # session_id: si el cliente no envía, lo creamos aquí y lo devolvemos para que lo use en adelante
+    effective_session_id = request.session_id if request.session_id else str(uuid.uuid4())
+
+    # Historial: desde el body o desde BD por session_id
+    history_list: list[dict] = []
+    if request.history:
+        history_list = [{"role": m.role, "content": m.content} for m in request.history]
+    elif request.session_id:
+        rows = (
+            db.execute(
+                select(ChatMessage.role, ChatMessage.content)
+                .where(ChatMessage.session_id == effective_session_id)
+                .order_by(ChatMessage.created_at.asc())
+                .limit(MAX_HISTORY_LOAD)
+            )
+            .fetchall()
+        )
+        history_list = [{"role": r.role, "content": r.content} for r in rows]
 
     # Búsqueda por similitud con pgvector (equivalente a similarity_search_with_score de FAISS)
     docs_with_scores = similarity_search_chunks_pgvector(
@@ -110,12 +132,24 @@ async def ask_question(request: QuestionRequest, db: Session = Depends(get_db)):
     if len(unique_chunks) > len(context_parts):
         context_for_llm += "\n\n[... contexto truncado por límite del modelo ...]"
 
-    answer = generate_answer(question=request.question, context=context_for_llm)
+    answer = generate_answer(
+        question=request.question,
+        context=context_for_llm,
+        history=history_list if history_list else None,
+    )
 
-    # context_used: lo que realmente vio el LLM (semillas + vecinos), para transparencia
-    return {
-        "question": request.question,
-        "answer": answer,
-        "results": results,
-        "context_used": context_parts,
-    }
+    # Guardar este turno en BD (siempre; session_id creado por backend si no vino en la petición)
+    if db.get(SessionModel, effective_session_id) is None:
+        db.add(SessionModel(id=effective_session_id))
+        db.flush()
+    db.add(ChatMessage(session_id=effective_session_id, role="user", content=request.question))
+    db.add(ChatMessage(session_id=effective_session_id, role="assistant", content=answer))
+    db.commit()
+
+    return AskResponse(
+        question=request.question,
+        answer=answer,
+        results=results,
+        context_used=context_parts,
+        session_id=effective_session_id,
+    )

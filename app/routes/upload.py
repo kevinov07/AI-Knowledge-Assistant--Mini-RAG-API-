@@ -14,15 +14,156 @@ from sqlalchemy.orm import Session
 
 from app.rag.chunking import chunk_text
 from app.rag.document_processor import DocumentProcessor
-from app.schemas import UploadResponse
+from app.schemas import UploadResponse, UploadedDocument
 from app.rag.embeddings import get_embeddings
-from app.db.models import Document as DocumentModel, Chunk as ChunkModel
+from app.db.models import Document as DocumentModel, Chunk as ChunkModel, Collection as CollectionModel
 from app.db.database import get_db
+from app.dependencies import get_collection_with_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = ", ".join(sorted(DocumentProcessor.SUPPORTED_FORMATS))
+
+
+
+@router.post(
+    "/upload/{collection_id}",
+    response_model=UploadResponse,
+    summary="Subir documentos a una colección específica",
+    response_description="Lista de archivos subidos correctamente, fallos (si los hay) y número de documentos indexados.",
+)
+async def upload_files_to_collection(
+    collection: CollectionModel = Depends(get_collection_with_access),
+    db: Session = Depends(get_db),
+    files: List[UploadFile] = File(
+        ...,
+        description=f"Uno o más archivos a procesar. Formatos soportados: {SUPPORTED_EXTENSIONS}.",
+    ),
+):
+    """
+    Procesa y **indexa** uno o más documentos en una colección específica.
+    
+    Para colecciones públicas: no requiere token.
+    Para colecciones privadas: requiere token obtenido con POST /collections/{id}/unlock.
+    
+    Header opcional (requerido para privadas):
+        Authorization: Bearer <access_token>
+    
+    Flujo idéntico al endpoint /upload pero guardando con collection_id.
+    """
+    collection_id = collection.id
+    
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    uploaded_files = []
+    failed_files = []
+
+    for file in files:
+        if not file.filename or not file.filename.strip():
+            failed_files.append({"filename": "(sin nombre)", "error": "Nombre de archivo vacío."})
+            continue
+
+        if not DocumentProcessor.is_supported(file.filename):
+            failed_files.append({
+                "filename": file.filename,
+                "error": f"Formato no soportado. Use: {SUPPORTED_EXTENSIONS}"
+            })
+            continue
+
+        try:
+            content = await file.read()
+            text = DocumentProcessor.process_document(content, file.filename)
+            if not text or not text.strip():
+                failed_files.append({
+                    "filename": file.filename,
+                    "error": "El documento está vacío o no se pudo extraer texto."
+                })
+                continue
+
+            chunks = chunk_text(text)
+            if not chunks:
+                failed_files.append({
+                    "filename": file.filename,
+                    "error": "No se pudo dividir en chunks (texto vacío o demasiado corto)."
+                })
+                continue
+
+            document_id = str(uuid.uuid4())
+            document = DocumentModel(
+                id=document_id,
+                filename=file.filename,
+                size=file.size,
+                collection_id=collection_id,  # ← Diferencia clave: asociar a colección
+            )
+            
+            chunk_texts = [c.strip() for c in chunks]
+            embeddings = get_embeddings(chunk_texts)
+            if len(embeddings) != len(chunk_texts):
+                raise RuntimeError("Número de embeddings no coincide con número de chunks")
+
+            db.add(document)
+            db.flush()
+            
+            chunks_models = []
+            for i, chunk in enumerate(chunk_texts):
+                chunk_id = f"{document_id}_{i}"
+                embedding = embeddings[i]
+                chunk_model = ChunkModel(
+                    id=chunk_id,
+                    document_id=document_id,
+                    chunk_index=i,
+                    filename=file.filename,
+                    text=chunk,
+                    embedding=embedding,
+                )
+                chunks_models.append(chunk_model)
+            db.add_all(chunks_models)
+            db.commit()
+            uploaded_files.append(UploadedDocument(id=document_id, filename=file.filename))
+
+        except ValueError as e:
+            db.rollback()
+            logger.warning(
+                "Error de validación al procesar archivo %s: %s",
+                file.filename,
+                e,
+            )
+            failed_files.append({
+                "filename": file.filename,
+                "error": str(e),
+            })
+        except Exception as e:
+            db.rollback()
+            logger.exception("Error interno al procesar archivo %s", file.filename)
+            failed_files.append({
+                "filename": file.filename,
+                "error": "Error interno al procesar este archivo. Revisa los logs del servidor para más detalles.",
+            })
+
+    if not uploaded_files:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": "No se pudo procesar ningún archivo. Formatos soportados: " + SUPPORTED_EXTENSIONS,
+                "failed_files": failed_files,
+            },
+        )
+
+    return UploadResponse(
+        files_uploaded=uploaded_files,
+        failed_files=failed_files,
+        documents_indexed=len(uploaded_files),
+    )
+
+
+
+
+
+
+
+
 
 
 @router.post(
@@ -53,7 +194,7 @@ async def upload_files(
     `failed_files` con el motivo; el resto se procesa igual. Si **todos** fallan, responde 400.
 
     **Respuesta:**
-    - `files_uploaded`: nombres de los archivos indexados correctamente.
+    - `files_uploaded`: lista de { id, filename } de los documentos indexados correctamente.
     - `failed_files`: lista de { filename, error } para los que fallaron.
     - `documents_indexed`: cantidad de documentos indexados (= len(files_uploaded)).
     """
@@ -112,6 +253,7 @@ async def upload_files(
             document = DocumentModel(
                 id=document_id,
                 filename=file.filename,
+                size=file.size,
             )
             # Embeddings en batch (más eficiente que chunk por chunk)
             chunk_texts = [c.strip() for c in chunks]
@@ -150,7 +292,7 @@ async def upload_files(
             db.add_all(chunks_models)
             # Commit por archivo: si este archivo va bien, se persiste aunque el siguiente falle.
             db.commit()
-            uploaded_files.append(file.filename)
+            uploaded_files.append(UploadedDocument(id=document_id, filename=file.filename))
 
         except ValueError as e:
             # Errores de validación/control (texto vacío, chunks, etc.)
@@ -182,8 +324,8 @@ async def upload_files(
             },
         )
 
-    return {
-        "files_uploaded": uploaded_files,
-        "failed_files": failed_files,
-        "documents_indexed": len(uploaded_files)
-    }
+    return UploadResponse(
+        files_uploaded=uploaded_files,
+        failed_files=failed_files,
+        documents_indexed=len(uploaded_files),
+    )
