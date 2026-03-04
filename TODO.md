@@ -42,14 +42,14 @@
 
 ### 📚 Sistema de colecciones
 
-- [ ] **Colecciones de documentos**
+- [✅] **Colecciones de documentos**
   - Permitir a los usuarios crear colecciones personalizadas de documentos
   - Características:
     - **Colecciones públicas**: accesibles para todos
     - **Colecciones privadas**: protegidas con clave/código de acceso
     - Selector de colección para elegir el contexto en las consultas
 
-- [ ] **Backend para colecciones**
+- [✅] **Backend para colecciones**
   - Implementar base de datos para gestionar colecciones
   - API endpoints para CRUD de colecciones
   - Validación de contraseña simple para colecciones privadas (sin sistema de usuarios)
@@ -62,6 +62,8 @@
 - [ ] **Filtro por documento cuando el usuario menciona uno**
   - Detectar en la pregunta mención a un documento (nombre de archivo, "el CV", "en el documento X", coincidencia con `documents.filename`).
   - Restringir la búsqueda semántica a ese documento: en `similarity_search_chunks_pgvector` añadir filtro `WHERE document_id = :doc_id` (o lista de candidatos) para que los k chunks salgan solo de ese doc.
+
+### Mejorar el sistema para que no haya promp injection
 
 ### 🔄 Reintentar respuesta (mejor contexto)
 
