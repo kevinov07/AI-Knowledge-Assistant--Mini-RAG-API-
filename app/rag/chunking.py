@@ -4,9 +4,10 @@ Corta respetando párrafos (\\n\\n), luego líneas (\\n), luego espacios.
 """
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-# Tamaño y solapamiento en caracteres (~equivalente a ~100 palabras / 20 overlap).
-DEFAULT_CHUNK_SIZE = 600
-DEFAULT_CHUNK_OVERLAP = 100
+# Tamaño y solapamiento en caracteres.
+# Aumentado para generar menos chunks (menos embeddings) y acelerar el indexado.
+DEFAULT_CHUNK_SIZE = 1200
+DEFAULT_CHUNK_OVERLAP = 150
 
 
 def _get_splitter(chunk_size: int, chunk_overlap: int) -> RecursiveCharacterTextSplitter:

@@ -11,6 +11,10 @@ from docx import Document as DocxDocument
 
 import fitz
 
+# Límite duro de caracteres por documento para evitar que libros enormes
+# disparen el número de chunks/embeddings y ralenticen mucho el indexado.
+MAX_CHARS_PER_DOCUMENT = 400_000
+
 def normalize_text_for_rag(text: str) -> str:
     """
     Normaliza texto extraído (sobre todo de PDF) para mejorar calidad en chunks y búsqueda.
@@ -322,5 +326,16 @@ class DocumentProcessor:
             raise ValueError(f"No hay procesador disponible para {extension}")
 
         raw = processor(content)
-        # Aplicar normalización a todos los formatos para consistencia y mejor RAG
+
+        # Limitar número máximo de caracteres por documento para acotar
+        # el coste de chunking + embeddings, especialmente en libros largos.
+        if len(raw) > MAX_CHARS_PER_DOCUMENT:
+            raw = raw[:MAX_CHARS_PER_DOCUMENT]
+
+        # Para .txt devolvemos el texto tal cual (ya limpio) sin normalización extra,
+        # que es costosa y en este formato suele ser innecesaria.
+        if extension == ".txt":
+            return raw
+
+        # Para el resto de formatos seguimos normalizando para mejorar calidad RAG.
         return normalize_text_for_rag(raw)
